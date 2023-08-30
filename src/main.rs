@@ -6,7 +6,7 @@
 
 use axum::{
     body::Bytes,
-    extract::{BodyStream, Multipart, Path},
+    extract::{BodyStream, Multipart, Path, DefaultBodyLimit},
     http::StatusCode,
     response::{Html, Redirect},
     routing::{get, post},
@@ -14,7 +14,10 @@ use axum::{
 };
 use futures::{Stream, TryStreamExt};
 use std::{io, net::SocketAddr};
-use tokio::{fs::File, io::BufWriter};
+use tokio::{
+    fs::File,
+    io::{BufWriter, ErrorKind}
+};
 use tokio_util::io::StreamReader;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -31,13 +34,18 @@ async fn main() {
         .init();
 
     // save files to a separate directory to not override files in the current directory
-    tokio::fs::create_dir(UPLOADS_DIRECTORY)
-        .await
-        .expect("failed to create `uploads` directory");
+    match tokio::fs::create_dir(UPLOADS_DIRECTORY).await {
+        Ok(_) => (),
+        Err(err) => match err.kind() {
+            ErrorKind::AlreadyExists => (),
+            _ => Err(err).expect("failed to create `uploads` directory"),
+        },
+    }
 
     let app = Router::new()
         .route("/", get(show_form).post(accept_form))
-        .route("/file/:file_name", post(save_request_body));
+        .route("/file/:file_name", post(save_request_body))
+        .layer(DefaultBodyLimit::disable());
 
     let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
     tracing::debug!("listening on {}", addr);
