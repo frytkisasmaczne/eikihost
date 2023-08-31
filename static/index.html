@@ -28,21 +28,22 @@ audio{
 </head>
 
 <body>
-	<div id="app" class="overlay" ondrop="handleDrop(event);" ondragover="handleDrag(event);"></div>
-
-	<script>
-document.getElementById("app").innerHTML = `
-	<h1>antyremiliowy drag and drop file hosting</h1>
-	<div style="display: table;">
-		<input style="display: table-cell;" type="file" id="fileInput" />
+	<div id="app" class="overlay" ondrop="handleDrop(event);" ondragover="handleDrag(event);">
+		<h1>antyremiliowy drag and drop file hosting</h1>
+		<div style="display: table;">
+		<form style="display: table-cell;">
+			<input type="file" id="fileInput" method="POST"target="_self">
+		</form>
 		<form style="display: table-cell;" action="/list" method="POST" target="_self">
 	   		<input type="text" id="password" name="p">
 			<input type="submit" value="list">
 		</form>
+		</div>
+		<audio controls="" src="https://streaming.radio.lublin.pl:8843/128k" type="audio/mpeg"></audio>
+		<div id="responses"></div>
 	</div>
-	<audio controls="" src="https://streaming.radio.lublin.pl:8843/128k" type="audio/mpeg"></audio>
-	<div id="responses"></div>
-`;
+
+	<script>
 const fileInput = document.querySelector("#fileInput");
 const responsesDiv = document.querySelector("#responses");
 const passwordField = document.querySelector("#password");

@@ -1,8 +1,8 @@
 
 use axum::{
     body::Bytes,
-    extract::{Multipart, DefaultBodyLimit, TypedHeader},
-    headers::authorization,
+    extract::{Multipart, DefaultBodyLimit, TypedHeader, Form},
+    headers::{authorization, Origin},
     http::StatusCode,
     response::{Html, IntoResponse, Response},
     routing::{get, post, get_service},
@@ -18,8 +18,10 @@ use tokio::{
 use tokio_util::io::StreamReader;
 use tower_http::services::ServeDir;
 use std::string::String;
+use serde::Deserialize;
 
 const UPLOADS_DIRECTORY: &str = "uploads";
+const PASSWORDS: [&str;2] = ["dupa", "odbyt"];
 
 #[tokio::main]
 async fn main() {
@@ -36,8 +38,8 @@ async fn main() {
     }
 
     let app = Router::new()
-        .route("/", get(show_form).post(accept_form))
-        .route("/list", post(show_list))
+        .route("/", get(index).post(index_post))
+        .route("/list", post(list))
         .route_service("/:filename", get_service(ServeDir::new(UPLOADS_DIRECTORY)))
         .layer(DefaultBodyLimit::disable());
 
@@ -49,14 +51,21 @@ async fn main() {
         .unwrap();
 }
 
-async fn show_form() -> Result<Html<String>, String> {
+async fn index() -> Result<Html<String>, String> {
     match tokio::fs::read_to_string("static/index.html").await {
         Ok(text) => Ok(Html(text)),
         Err(err) => Err(err.to_string()),
     }
 }
 
-async fn show_list() -> impl IntoResponse {
+async fn list(
+    Form(pass): Form<Pass>,
+) -> impl IntoResponse {
+
+    if !PASSWORDS.contains(&pass.p.as_str()) {
+        return (StatusCode::UNAUTHORIZED, "no password".to_string()).into_response()
+    }
+
     let files = match std::fs::read_dir(UPLOADS_DIRECTORY) {
         Ok(list) => list,
         Err(err) => return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
@@ -71,6 +80,11 @@ async fn show_list() -> impl IntoResponse {
 
     let template = ListTemplate{files};
     HtmlTemplate(template).into_response()
+}
+
+#[derive(Deserialize, Debug)]
+struct Pass {
+    p: String,
 }
 
 #[derive(Template)]
@@ -97,17 +111,18 @@ where
     }
 }
 
-async fn accept_form(
+async fn index_post(
+    auth: TypedHeader<authorization::Authorization<authorization::Basic>>,
+    origin: TypedHeader<Origin>,
     mut multipart: Multipart,
-    // auth: TypedHeader<authorization::Authorization<authorization::Basic>>
 ) -> Result<(StatusCode, String), (StatusCode, String)>
 {
-    // if !["makise", "puszkapepsi"].contains(&auth.0.password()) {
-    //     // return (StatusCode::UNAUTHORIZED, "mail uso@denpa.pl to maybe get a password").into_response()
-    //     return Ok((StatusCode::UNAUTHORIZED, "mail uso@denpa.pl to maybe get a password".to_string()))
-    // }
+    if !PASSWORDS.contains(&auth.0.password()) {
+        // return (StatusCode::UNAUTHORIZED, "mail uso@denpa.pl to maybe get a password").into_response()
+        return Ok((StatusCode::UNAUTHORIZED, "mail uso@denpa.pl to maybe get a password".to_string()))
+    }
 
-    let mut filenames: Vec<String> = Vec::new();
+    let mut urls: Vec<String> = Vec::new();
     while let Some(field) = multipart.next_field().await.unwrap() {
         let file_name = if let Some(file_name) = field.file_name() {
             file_name.to_owned()
@@ -115,14 +130,13 @@ async fn accept_form(
             continue;
         };
 
-        stream_to_file(&file_name, field).await?;
-        filenames.push(file_name);
+        if let Some(url) = std::path::Path::new(origin.0.to_string().as_str()).join(&file_name).to_str() {
+            urls.push(url.to_string());
+            stream_to_file(&file_name, field).await?;
+        }
     }
 
-    match serde_json::to_string(&filenames) {
-        Ok(json) => Ok((StatusCode::OK, String::from(json))),
-        Err(err) => Err((StatusCode::INTERNAL_SERVER_ERROR, err.to_string())),
-    }
+    Ok((StatusCode::OK, urls.join("\n")))
 }
 
 async fn stream_to_file<S, E>(path: &str, stream: S) -> Result<(), (StatusCode, String)>

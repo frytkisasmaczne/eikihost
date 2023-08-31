@@ -260,6 +260,7 @@ dependencies = [
  "askama_axum",
  "axum",
  "futures",
+ "serde",
  "serde_json",
  "tokio",
  "tokio-util",
