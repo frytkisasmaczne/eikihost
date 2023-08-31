@@ -1,17 +1,14 @@
-//! Run with
-//!
-//! ```not_rust
-//! cargo run -p example-stream-to-file
-//! ```
 
 use axum::{
     body::Bytes,
-    extract::{BodyStream, Multipart, Path, DefaultBodyLimit},
+    extract::{Multipart, DefaultBodyLimit, TypedHeader},
+    headers::authorization,
     http::StatusCode,
-    response::{Html, Redirect},
-    routing::{get, post},
+    response::{Html, IntoResponse, Response},
+    routing::{get, post, get_service},
     BoxError, Router,
 };
+use askama::Template;
 use futures::{Stream, TryStreamExt};
 use std::{io, net::SocketAddr};
 use tokio::{
@@ -19,32 +16,29 @@ use tokio::{
     io::{BufWriter, ErrorKind}
 };
 use tokio_util::io::StreamReader;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use tower_http::services::ServeDir;
+use std::string::String;
 
 const UPLOADS_DIRECTORY: &str = "uploads";
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "example_stream_to_file=debug".into()),
-        )
-        .with(tracing_subscriber::fmt::layer())
-        .init();
+    tracing_subscriber::fmt()
+    .with_max_level(tracing::Level::DEBUG)
+    .init();
 
-    // save files to a separate directory to not override files in the current directory
     match tokio::fs::create_dir(UPLOADS_DIRECTORY).await {
         Ok(_) => (),
         Err(err) => match err.kind() {
             ErrorKind::AlreadyExists => (),
-            _ => Err(err).expect("failed to create `uploads` directory"),
+            _ => panic!("{err:?}"),
         },
     }
 
     let app = Router::new()
         .route("/", get(show_form).post(accept_form))
-        .route("/file/:file_name", post(save_request_body))
+        .route("/list", post(show_list))
+        .route_service("/:filename", get_service(ServeDir::new(UPLOADS_DIRECTORY)))
         .layer(DefaultBodyLimit::disable());
 
     let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
@@ -55,46 +49,65 @@ async fn main() {
         .unwrap();
 }
 
-// Handler that streams the request body to a file.
-//
-// POST'ing to `/file/foo.txt` will create a file called `foo.txt`.
-async fn save_request_body(
-    Path(file_name): Path<String>,
-    body: BodyStream,
-) -> Result<(), (StatusCode, String)> {
-    stream_to_file(&file_name, body).await
+async fn show_form() -> Result<Html<String>, String> {
+    match tokio::fs::read_to_string("static/index.html").await {
+        Ok(text) => Ok(Html(text)),
+        Err(err) => Err(err.to_string()),
+    }
 }
 
-// Handler that returns HTML for a multipart form.
-async fn show_form() -> Html<&'static str> {
-    Html(
-        r#"
-        <!doctype html>
-        <html>
-            <head>
-                <title>Upload something!</title>
-            </head>
-            <body>
-                <form action="/" method="post" enctype="multipart/form-data">
-                    <div>
-                        <label>
-                            Upload file:
-                            <input type="file" name="file" multiple>
-                        </label>
-                    </div>
+async fn show_list() -> impl IntoResponse {
+    let files = match std::fs::read_dir(UPLOADS_DIRECTORY) {
+        Ok(list) => list,
+        Err(err) => return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+    }.filter_map(|f| {
+        if let Ok(filenally) = f {
+            if let Ok(filename) = filenally.file_name().into_string() {
+                return Some(filename);
+            }
+        }
+        None
+    }).collect();
 
-                    <div>
-                        <input type="submit" value="Upload files">
-                    </div>
-                </form>
-            </body>
-        </html>
-        "#,
-    )
+    let template = ListTemplate{files};
+    HtmlTemplate(template).into_response()
 }
 
-// Handler that accepts a multipart form upload and streams each field to a file.
-async fn accept_form(mut multipart: Multipart) -> Result<Redirect, (StatusCode, String)> {
+#[derive(Template)]
+#[template(path = "list.html")]
+struct ListTemplate {
+    files: Vec<String>,
+}
+
+struct HtmlTemplate<T>(T);
+
+impl<T> IntoResponse for HtmlTemplate<T>
+where
+    T: Template,
+{
+    fn into_response(self) -> Response {
+        match self.0.render() {
+            Ok(html) => Html(html).into_response(),
+            Err(err) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to render template. Error: {}", err),
+            )
+                .into_response(),
+        }
+    }
+}
+
+async fn accept_form(
+    mut multipart: Multipart,
+    // auth: TypedHeader<authorization::Authorization<authorization::Basic>>
+) -> Result<(StatusCode, String), (StatusCode, String)>
+{
+    // if !["makise", "puszkapepsi"].contains(&auth.0.password()) {
+    //     // return (StatusCode::UNAUTHORIZED, "mail uso@denpa.pl to maybe get a password").into_response()
+    //     return Ok((StatusCode::UNAUTHORIZED, "mail uso@denpa.pl to maybe get a password".to_string()))
+    // }
+
+    let mut filenames: Vec<String> = Vec::new();
     while let Some(field) = multipart.next_field().await.unwrap() {
         let file_name = if let Some(file_name) = field.file_name() {
             file_name.to_owned()
@@ -103,12 +116,15 @@ async fn accept_form(mut multipart: Multipart) -> Result<Redirect, (StatusCode, 
         };
 
         stream_to_file(&file_name, field).await?;
+        filenames.push(file_name);
     }
 
-    Ok(Redirect::to("/"))
+    match serde_json::to_string(&filenames) {
+        Ok(json) => Ok((StatusCode::OK, String::from(json))),
+        Err(err) => Err((StatusCode::INTERNAL_SERVER_ERROR, err.to_string())),
+    }
 }
 
-// Save a `Stream` to a file
 async fn stream_to_file<S, E>(path: &str, stream: S) -> Result<(), (StatusCode, String)>
 where
     S: Stream<Item = Result<Bytes, E>>,
@@ -137,8 +153,6 @@ where
     .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))
 }
 
-// to prevent directory traversal attacks we ensure the path consists of exactly one normal
-// component
 fn path_is_valid(path: &str) -> bool {
     let path = std::path::Path::new(path);
     let mut components = path.components().peekable();

@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+	<title>antyremiliowy dnd file host</title>
+	<meta charset="UTF-8" />
+	<style>
+div {
+	display:block;
+}
+div#drop {
+	height:100%;
+	width:100%;
+}
+.overlay{
+	opacity:1.0;
+	position:fixed;
+	width:100%;
+	height:100%;
+	top:0px;
+	left:0px;
+	z-index:-1000;
+}
+audio{
+	padding:10px;
+}
+	</style>
+</head>
+
+<body>
+	<div id="app" class="overlay" ondrop="handleDrop(event);" ondragover="handleDrag(event);"></div>
+
+	<script>
+document.getElementById("app").innerHTML = `
+	<h1>antyremiliowy drag and drop file hosting</h1>
+	<div style="display: table;">
+		<input style="display: table-cell;" type="file" id="fileInput" />
+		<form style="display: table-cell;" action="/list" method="POST" target="_self">
+	   		<input type="text" id="password" name="p">
+			<input type="submit" value="list">
+		</form>
+	</div>
+	<audio controls="" src="https://streaming.radio.lublin.pl:8843/128k" type="audio/mpeg"></audio>
+	<div id="responses"></div>
+`;
+const fileInput = document.querySelector("#fileInput");
+const responsesDiv = document.querySelector("#responses");
+const passwordField = document.querySelector("#password");
+const twodecimaldigits = new Intl.NumberFormat('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const uploadFile = file => {
+	let API_ENDPOINT = window.location.origin;
+	const request = new XMLHttpRequest();
+	const formData = new FormData();
+	let resp = document.createElement('p');
+	responsesDiv.appendChild(resp);
+
+	request.onload = () => {
+		resp.innerHTML = '<a href="'+request.responseText+'">'+request.responseText+"</a>";
+	};
+	request.onerror = () => {
+		resp.innerHTML = 'mail uso@denpa.pl to get a password';
+	};
+	request.upload.onprogress = (e) => {
+		if (e.lengthComputable){
+			resp.innerHTML = twodecimaldigits.format((e.loaded/e.total)*100)+'% '+e.loaded+'/'+e.total+'B';
+		}
+	};
+//	request.upload.addEventListener('progress', prog);
+	let password = passwordField.value;
+	request.open("POST", API_ENDPOINT, true);
+	request.setRequestHeader('Authorization', 'Basic '+btoa(':'+password));
+	formData.append("file", file);
+	request.send(formData);
+};
+const handleDrop = (ev) => {
+	ev.preventDefault();
+	if (ev.dataTransfer.items) {
+		for (var i = 0; i < ev.dataTransfer.items.length; i++) {
+			// If dropped items aren't files, reject them
+			if (ev.dataTransfer.items[i].kind === 'file') {
+				var file = ev.dataTransfer.items[i].getAsFile();
+				uploadFile(file);
+			}
+		}
+	}else{
+		// Use DataTransfer interface to access the file(s)
+		for (var i = 0; i < ev.dataTransfer.files.length; i++) {
+			uploadFile(ev.dataTransfer.files[i]);
+		}
+	}
+}
+const handleDrag = (ev) => {
+	ev.preventDefault();
+}
+fileInput.addEventListener("change", event => {
+	const files = event.target.files;
+	uploadFile(files[0]);
+});
+	</script>
+	</body>
+
+</html>
+
